@@ -1,0 +1,28 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Exchange Amazon Auth Code</title>
+<style>
+  body{font:14px/1.6 system-ui;margin:24px;max-width:720px}
+  label{display:block;margin:10px 0 6px}
+  input{width:100%;padding:8px}
+  button{margin-top:12px;padding:8px 14px}
+  .note{color:#666}
+</style>
+<h2>用授权码 code 兑换 access_token / refresh_token</h2>
+<form action="https://api.amazon.com/auth/o2/token" method="post" target="_blank">
+  <input type="hidden" name="grant_type" value="authorization_code">
+  <label>code（授权后地址栏里的 ?code=...）
+    <input name="code" required>
+  </label>
+  <label>client_id
+    <input name="client_id" required placeholder="你的 LWA Client ID">
+  </label>
+  <label>client_secret
+    <input name="client_secret" required placeholder="你的 LWA Client Secret">
+  </label>
+  <label>redirect_uri（须与白名单完全一致）
+    <input name="redirect_uri" value="https://qiweitan.github.io/ads-oauth/callback.html" required>
+  </label>
+  <button>兑换（新标签页显示 JSON）</button>
+</form>
+<p class="note">成功返回的 JSON 会包含 <code>access_token</code> 与 <code>refresh_token</code>。请妥善保存 <code>refresh_token</code>，以后用 refresh.html 刷新即可。</p>
