@@ -1,0 +1,20 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Amazon OAuth Callback</title>
+<style>
+  body{font:14px/1.6 system-ui;margin:24px}
+  code{background:#f4f4f4;padding:2px 6px;border-radius:4px}
+</style>
+<h2>授权完成</h2>
+<div id="msg">正在解析 code…</div>
+<script>
+  const p = new URLSearchParams(location.search);
+  const code = p.get("code");
+  const state = p.get("state");
+  const el = document.getElementById("msg");
+  if (!code) {
+    el.textContent = "未收到 code（URL 里没有 ?code=...）。";
+  } else {
+    el.innerHTML = "授权码：<code>"+code+"</code><br>请复制该 <code>code</code>，在你的后端/安全环境用它兑换令牌。";
+  }
+</script>
