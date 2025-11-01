@@ -1,0 +1,75 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Refresh Amazon Token</title>
+<meta name="referrer" content="no-referrer">
+<style>
+  body{font:14px/1.6 system-ui;margin:24px;max-width:720px}
+  label{display:block;margin:10px 0 6px}
+  input{width:100%;padding:8px}
+  button{margin-top:12px;padding:8px 14px}
+  .note{color:#666}
+  .row{display:flex;gap:8px;align-items:center}
+</style>
+
+<h2>使用 refresh_token 刷新 access_token</h2>
+
+<form action="https://api.amazon.com/auth/o2/token" method="post" target="_blank" id="form">
+  <input type="hidden" name="grant_type" value="refresh_token">
+
+  <label>refresh_token
+    <input name="refresh_token" placeholder="粘贴以 Atzr| 开头的 refresh_token" required>
+  </label>
+
+  <label>client_id
+    <input name="client_id" id="cid" value="amzn1.application-oa2-client.57fcb9c478f94a20aa63d70e57c440ee" required>
+  </label>
+
+  <label>client_secret
+    <input name="client_secret" id="csec" placeholder="你的 LWA Client Secret" required>
+  </label>
+
+  <div class="row">
+    <label class="row" style="margin:0;">
+      <input type="checkbox" id="rememberCid">
+      仅在本浏览器中记住 client_id（保存在 localStorage）
+    </label>
+  </div>
+
+  <button>刷新（新标签页显示 JSON）</button>
+</form>
+
+<p class="note">
+  提示：刷新不需要 <code>redirect_uri</code>。成功响应包含 <code>access_token</code> 与 <code>expires_in</code>（秒）。如响应里还包含新的 <code>refresh_token</code>，请立即替换保存的旧值。
+</p>
+
+<script>
+  // 仅本机浏览器记住 client_id（不记 secret）
+  const cidInput = document.getElementById('cid');
+  const rememberCid = document.getElementById('rememberCid');
+  const KEY = 'LWA_CLIENT_ID_SAVED';
+
+  // 读取
+  const savedCid = localStorage.getItem(KEY);
+  if (savedCid) {
+    cidInput.value = savedCid;
+    rememberCid.checked = true;
+  }
+
+  // 变更时保存/清除
+  rememberCid.addEventListener('change', () => {
+    if (rememberCid.checked) {
+      localStorage.setItem(KEY, cidInput.value || '');
+    } else {
+      localStorage.removeItem(KEY);
+    }
+  });
+  cidInput.addEventListener('input', () => {
+    if (rememberCid.checked) localStorage.setItem(KEY, cidInput.value || '');
+  });
+
+  // 提交前简单校验
+  document.getElementById('form').addEventListener('submit', (e) => {
+    const rt = e.target.refresh_token.value.trim();
+    if (!rt) { e.preventDefault(); alert('请填写 refresh_token'); }
+  });
+</script>
