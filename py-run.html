@@ -1,0 +1,163 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Browser Python (Pyodide) — JSON 分析台</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  body{font:14px/1.6 system-ui,Arial;margin:18px;max-width:1100px}
+  h1{font-size:20px;margin:6px 0 12px}
+  .row{display:flex;gap:12px;flex-wrap:wrap}
+  .col{flex:1;min-width:320px}
+  textarea{width:100%;height:180px;padding:8px;font-family:ui-monospace,Consolas,monospace}
+  pre{background:#111;color:#eee;padding:10px;overflow:auto;max-height:260px}
+  button,input,select{font:14px/1.4 system-ui;padding:6px 10px}
+  .muted{color:#666}
+  #dfout table{border-collapse:collapse}
+  #dfout th,#dfout td{border:1px solid #ddd;padding:4px 6px;white-space:nowrap}
+</style>
+
+<h1>JSON → Python（pandas）分析台</h1>
+<p class="muted">无需终端/Colab。左侧放 JSON（粘贴/上传/URL），右侧写 Python 分析代码。点击“运行 Python”。</p>
+
+<div class="row">
+  <div class="col">
+    <h3>① 输入 JSON</h3>
+    <textarea id="jsonText" placeholder='在这里粘贴 JSON；或点击下方“选择文件/从URL加载”'></textarea>
+    <div class="row" style="align-items:center;margin-top:8px">
+      <input type="file" id="jsonFile" accept=".json,application/json" />
+      <input type="text" id="jsonUrl" placeholder="https://...（可选，从URL加载，需允许CORS）" style="flex:1" />
+      <button id="btnFetch">从URL加载</button>
+      <button id="btnSample">填入示例 JSON</button>
+    </div>
+  </div>
+
+  <div class="col">
+    <h3>② Python 代码</h3>
+    <textarea id="pyCode"></textarea>
+    <div class="row" style="align-items:center;margin-top:8px">
+      <button id="btnExample">插入示例脚本</button>
+      <button id="btnRun" style="background:#2e7d32;color:#fff">运行 Python</button>
+      <span id="status" class="muted">状态：等待中</span>
+    </div>
+  </div>
+</div>
+
+<h3>③ 运行结果</h3>
+<div class="row">
+  <div class="col">
+    <b>标准输出 / 日志</b>
+    <pre id="stdout"></pre>
+  </div>
+  <div class="col">
+    <b>DataFrame 预览</b>
+    <div id="dfout"></div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js"></script>
+<script>
+  const el = (id) => document.getElementById(id);
+  const jsonText = el("jsonText");
+  const jsonFile = el("jsonFile");
+  const jsonUrl  = el("jsonUrl");
+  const stdout   = el("stdout");
+  const dfout    = el("dfout");
+  const statusEl = el("status");
+  const pyCode   = el("pyCode");
+
+  // 载入 Pyodide
+  let pyodideReady = null;
+  async function loadPy() {
+    statusEl.textContent = "状态：正在加载 Pyodide...";
+    const pyodide = await loadPyodide({indexURL: "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/"});
+    // pandas、numpy 随 Pyodide 一起提供，可直接导入
+    statusEl.textContent = "状态：Pyodide 已就绪";
+    return pyodide;
+  }
+  pyodideReady = loadPy();
+
+  // 文件上传
+  jsonFile.addEventListener("change", async () => {
+    const f = jsonFile.files?.[0];
+    if (!f) return;
+    const txt = await f.text();
+    jsonText.value = txt;
+  });
+
+  // 从 URL 加载（需 CORS 允许）
+  el("btnFetch").addEventListener("click", async () => {
+    const url = jsonUrl.value.trim();
+    if (!url) return alert("请输入 JSON URL");
+    try {
+      const res = await fetch(url);
+      const txt = await res.text();
+      jsonText.value = txt;
+    } catch (e) {
+      alert("拉取失败：" + e);
+    }
+  });
+
+  // 示例 JSON
+  el("btnSample").addEventListener("click", () => {
+    jsonText.value = JSON.stringify([
+      {"campaignId": 123, "name": "C1", "state":"enabled", "dailyBudget": 10.5},
+      {"campaignId": 456, "name": "C2", "state":"paused",  "dailyBudget": 20}
+    ], null, 2);
+  });
+
+  // 示例脚本
+  el("btnExample").addEventListener("click", () => {
+    pyCode.value =
+`import json, pandas as pd
+# 从页面取 JSON 文本
+raw = PY_INPUT_JSON
+data = json.loads(raw)
+
+# 常见：Ads API 返回是列表/字典，使用 json_normalize 展平
+df = pd.json_normalize(data)
+
+# 基本信息
+print("记录数：", len(df))
+print("列名：", list(df.columns)[:10], "...")
+
+# 示例：筛选 + 排序
+# df = df[df["state"].isin(["enabled","paused"])].sort_values("dailyBudget", ascending=False)
+
+# 输出到页面
+from js import dfout
+html = df.head(50).to_html(index=False)
+dfout.innerHTML = html
+`;
+  });
+
+  // 运行 Python
+  el("btnRun").addEventListener("click", async () => {
+    const pyodide = await pyodideReady;
+    stdout.textContent = "";
+    dfout.innerHTML = "";
+    statusEl.textContent = "状态：运行中...";
+
+    // 将 JSON 文本作为变量传给 Python
+    const raw = jsonText.value || "[]";
+    pyodide.globals.set("PY_INPUT_JSON", raw);
+
+    // 捕获 stdout
+    let printed = "";
+    pyodide.setStdout({
+      batched: (s) => { printed += s; stdout.textContent = printed; }
+    });
+    pyodide.setStderr({
+      batched: (s) => { printed += s; stdout.textContent = printed; }
+    });
+
+    try {
+      await pyodide.runPythonAsync(pyCode.value);
+      statusEl.textContent = "状态：完成";
+    } catch (e) {
+      statusEl.textContent = "状态：出错";
+      stdout.textContent += "\n[Error] " + e;
+    }
+  });
+
+  // 默认填入一个示例脚本，便于上手
+  el("btnExample").click();
+</script>
