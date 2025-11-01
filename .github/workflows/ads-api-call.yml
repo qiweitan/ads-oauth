@@ -1,0 +1,94 @@
+name: Amazon Ads API (browser-only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: "API 区域：na=北美, eu=欧洲, fe=远东(JP/SG/AU)"
+        required: true
+        default: "fe"
+        type: choice
+        options: [na, eu, fe]
+      path:
+        description: "API 路径（含查询串），例：/v2/profiles 或 /v2/sp/campaigns?stateFilter=enabled,paused&count=20"
+        required: true
+      method:
+        description: "HTTP 方法"
+        required: true
+        default: "GET"
+        type: choice
+        options: [GET, POST, PUT, DELETE]
+      scope:
+        description: "Amazon-Advertising-API-Scope（即 profileId，如需访问具体广告主时必填）"
+        required: false
+      body:
+        description: "请求体 JSON（仅 POST/PUT 用；留空则发 {}）"
+        required: false
+        default: ""
+
+jobs:
+  call:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 刷新 access_token
+        id: refresh
+        run: |
+          set -e
+          ACCESS_JSON=$(curl -sS -X POST "https://api.amazon.com/auth/o2/token" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            -d "grant_type=refresh_token" \
+            -d "refresh_token=${{ secrets.LWA_REFRESH_TOKEN }}" \
+            -d "client_id=${{ secrets.LWA_CLIENT_ID }}" \
+            -d "client_secret=${{ secrets.LWA_CLIENT_SECRET }}")
+          echo "$ACCESS_JSON" | jq .
+          echo "ACCESS_TOKEN=$(echo "$ACCESS_JSON" | jq -r .access_token)" >> $GITHUB_ENV
+
+      - name: 选择区域基址
+        id: base
+        run: |
+          case "${{ github.event.inputs.region }}" in
+            na) echo "BASE=https://advertising-api.amazon.com" >> $GITHUB_ENV ;;
+            eu) echo "BASE=https://advertising-api-eu.amazon.com" >> $GITHUB_ENV ;;
+            fe) echo "BASE=https://advertising-api-fe.amazon.com" >> $GITHUB_ENV ;;
+            *)  echo "BASE=https://advertising-api-fe.amazon.com" >> $GITHUB_ENV ;;
+          esac
+
+      - name: 调用 Amazon Ads API
+        run: |
+          set -e
+          URL="${BASE}${{ github.event.inputs.path }}"
+          echo "Request URL: $URL"
+
+          # 组装请求头
+          HDRS=(-H "Authorization: Bearer $ACCESS_TOKEN"
+                -H "Amazon-Advertising-API-ClientId: ${{ secrets.LWA_CLIENT_ID }}"
+                -H "Content-Type: application/json")
+          if [ -n "${{ github.event.inputs.scope }}" ]; then
+            HDRS+=(-H "Amazon-Advertising-API-Scope: ${{ github.event.inputs.scope }}")
+          fi
+
+          # 请求体
+          BODY='${{ github.event.inputs.body }}'
+          if [ -z "$BODY" ]; then BODY='{}'; fi
+          echo "$BODY" > body.json
+
+          # 发送请求并保存响应
+          if [ "${{ github.event.inputs.method }}" = "GET" ] || [ "${{ github.event.inputs.method }}" = "DELETE" ]; then
+            curl -sS -D headers.txt -o body.json -X "${{ github.event.inputs.method }}" "${HDRS[@]}" "$URL"
+          else
+            curl -sS -D headers.txt -o body.json -X "${{ github.event.inputs.method }}" "${HDRS[@]}" --data @body.json "$URL"
+          fi
+
+          echo "==== Response Headers ====" > result.txt
+          cat headers.txt >> result.txt
+          echo -e "\n==== Response Body ====\n" >> result.txt
+          cat body.json | jq '.' >> result.txt || cat body.json >> result.txt
+
+      - name: 上传结果（artifact）
+        uses: actions/upload-artifact@v4
+        with:
+          name: ads-api-response
+          path: |
+            result.txt
+            body.json
+            headers.txt
