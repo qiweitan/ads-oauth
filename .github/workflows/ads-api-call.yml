@@ -10,7 +10,7 @@ on:
         type: choice
         options: [na, eu, fe]
       path:
-        description: "API 路径（以 / 开头），如 /sp/campaigns?count=10 或 /sb/v4/campaigns/list"
+        description: "API 路径（以 / 开头），如 /sp/campaigns/list 或 /sb/v4/campaigns/list"
         required: true
       method:
         description: "HTTP 方法"
@@ -19,14 +19,18 @@ on:
         type: choice
         options: [GET, POST, PUT, DELETE]
       scope:
-        description: "Amazon-Advertising-API-Scope（profileId；/profiles、/status 可留空）"
+        description: "Amazon-Advertising-API-Scope（profileId；/v2/profiles、/status 可留空）"
         required: false
       body:
         description: "请求体 JSON（仅 POST/PUT 用；GET/DELETE 留空）"
         required: false
         default: ""
       extraAccept:
-        description: "可选 Accept 头（如 SB v4：application/vnd.sbcampaignresource.v4+json）"
+        description: "可选 Accept 头（如 SP v3: application/vnd.spCampaign.v3+json；SB v4: application/vnd.sbcampaignresource.v4+json）"
+        required: false
+        default: ""
+      extraContentType:
+        description: "可选 Content-Type（如 SP v3: application/vnd.spCampaign.v3+json；默认 application/json）"
         required: false
         default: ""
 
@@ -51,7 +55,6 @@ jobs:
             -d "client_id=${{ secrets.LWA_CLIENT_ID }}" \
             -d "client_secret=${{ secrets.LWA_CLIENT_SECRET }}")
 
-          # 取出 access_token
           ACCESS_TOKEN=$(echo "$ACCESS_JSON" | jq -r .access_token)
           if [ -z "$ACCESS_TOKEN" ] || [ "$ACCESS_TOKEN" = "null" ]; then
             echo "刷新失败：$ACCESS_JSON"
@@ -59,7 +62,7 @@ jobs:
           fi
           echo "ACCESS_TOKEN=$ACCESS_TOKEN" >> $GITHUB_ENV
 
-          # 安全地打印掩码（只显示前4后4位，确认非空）
+          # 日志只显示前4后4位，避免泄露
           F=$(echo "$ACCESS_TOKEN" | cut -c1-4)
           L=$(echo "$ACCESS_TOKEN" | rev | cut -c1-4 | rev)
           echo "Access token 已获取：${F}****${L}"
@@ -73,6 +76,11 @@ jobs:
             *)  echo "BASE=https://advertising-api-fe.amazon.com" >> $GITHUB_ENV ;;
           esac
 
+      - name: 规范化 Scope（去前后空白）
+        run: |
+          SCOPE_TRIMMED="$(echo "${{ github.event.inputs.scope }}" | xargs)"
+          echo "SCOPE=$SCOPE_TRIMMED" >> $GITHUB_ENV
+
       - name: 调用 Amazon Ads API
         run: |
           set -e
@@ -80,25 +88,30 @@ jobs:
           echo "Request URL: $URL"
           echo "Method: ${{ github.event.inputs.method }}"
 
-          # 基本请求头
+          # 组装请求头（先不放 Content-Type，稍后决定）
           HDRS=(-H "Authorization: Bearer $ACCESS_TOKEN"
-                -H "Amazon-Advertising-API-ClientId: ${{ secrets.LWA_CLIENT_ID }}"
-                -H "Content-Type: application/json")
+                -H "Amazon-Advertising-API-ClientId: ${{ secrets.LWA_CLIENT_ID }}")
 
           # 可选 Scope（profileId）
-          if [ -n "${{ github.event.inputs.scope }}" ]; then
-            HDRS+=(-H "Amazon-Advertising-API-Scope: ${{ github.event.inputs.scope }}")
+          if [ -n "$SCOPE" ]; then
+            HDRS+=(-H "Amazon-Advertising-API-Scope: $SCOPE")
           fi
 
-          # 可选 Accept（SB v4 常用）
+          # 可选 Accept 版本头（SP v3 / SB v4 等常用）
           if [ -n "${{ github.event.inputs.extraAccept }}" ]; then
             HDRS+=(-H "Accept: ${{ github.event.inputs.extraAccept }}")
           fi
 
-          # 请求体
+          # Content-Type（默认 application/json，可被覆盖）
+          CT="${{ github.event.inputs.extraContentType }}"
+          if [ -z "$CT" ]; then CT="application/json"; fi
+          HDRS+=(-H "Content-Type: $CT")
+
+          # 构造 body（仅 POST/PUT）
           BODY='${{ github.event.inputs.body }}'
+
+          # 发请求并保存响应
           if [ "${{ github.event.inputs.method }}" = "GET" ] || [ "${{ github.event.inputs.method }}" = "DELETE" ]; then
-            # GET/DELETE 不发送 body
             curl -sS -D headers.txt -o body.json -X "${{ github.event.inputs.method }}" "${HDRS[@]}" "$URL"
           else
             if [ -z "$BODY" ]; then BODY='{}'; fi
