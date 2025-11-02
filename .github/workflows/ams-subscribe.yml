@@ -1,0 +1,108 @@
+name: AMS Subscribe (Firehose)
+
+on:
+  workflow_dispatch:
+    inputs:
+      profileId:
+        description: "Amazon-Advertising-API-Scope（如 4269222081361224）"
+        required: true
+      datasetId:
+        description: "数据集 ID（如 sp-traffic / sp-conversion / budget-usage）"
+        required: true
+        default: "sp-traffic"
+      deliveryStreamArn:
+        description: "Firehose Delivery Stream ARN（us-west-2）"
+        required: true
+      subscriberRoleArn:
+        description: "Subscriber Role ARN（us-west-2）"
+        required: true
+      subscriptionRoleArn:
+        description: "Subscription Role ARN（us-west-2）"
+        required: true
+
+jobs:
+  subscribe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Exchange refresh_token → access_token
+        id: token
+        shell: bash
+        env:
+          CLIENT_ID: ${{ secrets.ADS_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.ADS_CLIENT_SECRET }}
+          REFRESH_TOKEN: ${{ secrets.ADS_REFRESH_TOKEN }}
+        run: |
+          set -e
+          AT=$(curl -sS -X POST https://api.amazon.com/auth/o2/token \
+            -H 'Content-Type: application/x-www-form-urlencoded' \
+            --data-urlencode "grant_type=refresh_token" \
+            --data-urlencode "refresh_token=$REFRESH_TOKEN" \
+            --data-urlencode "client_id=$CLIENT_ID" \
+            --data-urlencode "client_secret=$CLIENT_SECRET" | jq -r '.access_token')
+          if [ -z "$AT" ] || [ "$AT" = "null" ]; then
+            echo "Failed to get access_token"; exit 1
+          fi
+          echo "access_token=$AT" >> $GITHUB_OUTPUT
+
+      - name: Create subscription (dataset → Firehose)
+        id: create
+        shell: bash
+        env:
+          AT: ${{ steps.token.outputs.access_token }}
+          SCOPE: ${{ github.event.inputs.profileId }}
+          DATASET_ID: ${{ github.event.inputs.datasetId }}
+          DELIVERY_ARN: ${{ github.event.inputs.deliveryStreamArn }}
+          SUBSCRIBER_ARN: ${{ github.event.inputs.subscriberRoleArn }}
+          SUBSCRIPTION_ARN: ${{ github.event.inputs.subscriptionRoleArn }}
+          CLIENT_ID: ${{ secrets.ADS_CLIENT_ID }}
+        run: |
+          set -e
+          CRT=$(python - <<'PY'
+import uuid, json
+print(str(uuid.uuid4()))
+PY
+)
+          BODY=$(jq -n --arg crt "$CRT" \
+                        --arg ds "$DATASET_ID" \
+                        --arg d "$DELIVERY_ARN" \
+                        --arg r1 "$SUBSCRIBER_ARN" \
+                        --arg r2 "$SUBSCRIPTION_ARN" \
+            '{
+              clientRequestToken: $crt,
+              dataSetId: $ds,
+              destination: {
+                firehoseDestination: {
+                  deliveryStreamArn: $d,
+                  subscriberRoleArn: $r1,
+                  subscriptionRoleArn: $r2
+                }
+              }
+            }')
+          echo "Request body:"
+          echo "$BODY" | jq .
+          RESP=$(curl -sS -X POST 'https://advertising-api.amazon.com/streams/subscriptions' \
+            -H "Authorization: Bearer $AT" \
+            -H "Amazon-Advertising-API-ClientId: $CLIENT_ID" \
+            -H "Amazon-Advertising-API-Scope: $SCOPE" \
+            -H "Accept: application/vnd.amazonmarketingstreamsubscriptions.v1+json" \
+            -H "Content-Type: application/vnd.amazonmarketingstreamsubscriptions.v1+json" \
+            --data "$BODY")
+          echo "$RESP"
+          SUB_ID=$(echo "$RESP" | jq -r '.subscriptionId // empty')
+          if [ -z "$SUB_ID" ]; then
+            echo "Failed to create subscription"; exit 1
+          fi
+          echo "subscription_id=$SUB_ID" >> $GITHUB_OUTPUT
+
+      - name: Verify (list subscriptions)
+        shell: bash
+        env:
+          AT: ${{ steps.token.outputs.access_token }}
+          SCOPE: ${{ github.event.inputs.profileId }}
+          CLIENT_ID: ${{ secrets.ADS_CLIENT_ID }}
+        run: |
+          curl -sS -X GET 'https://advertising-api.amazon.com/streams/subscriptions' \
+            -H "Authorization: Bearer $AT" \
+            -H "Amazon-Advertising-API-ClientId: $CLIENT_ID" \
+            -H "Amazon-Advertising-API-Scope: $SCOPE" \
+            -H "Accept: application/vnd.amazonmarketingstreamsubscriptions.v1+json" | jq .
