@@ -34,16 +34,15 @@ jobs:
         run: |
           set -euo pipefail
           OUT=$(mktemp); HDR=$(mktemp)
-          curl -sS -i -o "$OUT" -D "$HDR" https://api.amazon.com/auth/o2/token \
+          # 注意：去掉了 -i，避免把响应头写进 body
+          curl -sS -o "$OUT" -D "$HDR" https://api.amazon.com/auth/o2/token \
             -H "Content-Type: application/x-www-form-urlencoded" \
             --data-urlencode "grant_type=refresh_token" \
             --data-urlencode "refresh_token=$REFRESH_TOKEN" \
             --data-urlencode "client_id=$CLIENT_ID" \
             --data-urlencode "client_secret=$CLIENT_SECRET"
-          echo "=== Token Response Headers ==="
-          cat "$HDR"
-          echo "=== Token Response Body ==="
-          cat "$OUT" | jq . || cat "$OUT"
+          echo "=== Token Response Headers ==="; head -n 1 "$HDR"; tail -n +2 "$HDR" | sed 's/^[[:space:]]\+//'
+          echo "=== Token Response Body (JSON) ==="; cat "$OUT" | jq . || (echo "非 JSON 响应，前 200 字节：" && head -c 200 "$OUT")
           AT=$(cat "$OUT" | jq -r '.access_token // empty')
           if [ -z "$AT" ]; then
             echo "access_token 获取失败"; exit 1
@@ -64,14 +63,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          # 1) 生成 clientRequestToken
+          # 生成 clientRequestToken
           if command -v uuidgen >/dev/null 2>&1; then
             CRT=$(uuidgen)
           else
             CRT=$(cat /proc/sys/kernel/random/uuid)
           fi
 
-          # 2) 用 jq 组装请求体，避免手写 JSON 转义
           BODY=$(jq -n \
             --arg crt "$CRT" \
             --arg ds "$DATASET_ID" \
@@ -90,16 +88,14 @@ jobs:
               }
             }')
 
-          echo "=== Request body ==="
+          echo "=== Create Request Body ==="
           echo "$BODY" | jq .
 
-          # 3) 发送创建订阅请求（保留头和返回体）
-          RESP_BODY=$(mktemp)
-          RESP_HDR=$(mktemp)
-
+          CURL_OUT=$(mktemp)
+          CURL_HDR=$(mktemp)
+          # 同样：去掉 -i，只保留 -o 与 -D
           set +e
-          curl -sS -i -o "$RESP_BODY" -D "$RESP_HDR" \
-            -X POST "https://advertising-api.amazon.com/streams/subscriptions" \
+          curl -sS -o "$CURL_OUT" -D "$CURL_HDR" -X POST "https://advertising-api.amazon.com/streams/subscriptions" \
             -H "Authorization: Bearer $AT" \
             -H "Amazon-Advertising-API-ClientId: $CLIENT_ID" \
             -H "Amazon-Advertising-API-Scope: $SCOPE" \
@@ -109,23 +105,19 @@ jobs:
           RC=$?
           set -e
 
-          echo "=== Response headers ==="
-          cat "$RESP_HDR"
-          echo "=== Response body ==="
-          cat "$RESP_BODY" | jq . || cat "$RESP_BODY"
+          echo "=== Create Response Headers ==="
+          head -n 1 "$CURL_HDR"
+          tail -n +2 "$CURL_HDR" | sed 's/^[[:space:]]\+//'
+          echo "=== Create Response Body (JSON) ==="
+          cat "$CURL_OUT" | jq . || (echo "非 JSON 响应，前 200 字节：" && head -c 200 "$CURL_OUT")
 
-          SUB_ID=$(cat "$RESP_BODY" | jq -r '.subscriptionId // empty')
-
+          SUB_ID=$(cat "$CURL_OUT" | jq -r '.subscriptionId // empty')
           if [ "$RC" -ne 0 ]; then
-            echo "curl 返回码: $RC"
-            exit $RC
+            echo "curl 返回码: $RC"; exit $RC
           fi
-
           if [ -z "$SUB_ID" ]; then
-            echo "没有返回 subscriptionId，见上面的响应内容。"
-            exit 1
+            echo "没有返回 subscriptionId，以上为完整响应。"; exit 1
           fi
-
           echo "subscription_id=$SUB_ID" >> "$GITHUB_OUTPUT"
 
       - name: Verify (list subscriptions)
@@ -136,8 +128,8 @@ jobs:
           CLIENT_ID: ${{ secrets.LWA_CLIENT_ID }}
         run: |
           set -euo pipefail
-          echo "=== List subscriptions ==="
-          curl -sS -X GET "https://advertising-api.amazon.com/streams/subscriptions" \
+          echo "=== List Subscriptions ==="
+          curl -sS -o - -X GET "https://advertising-api.amazon.com/streams/subscriptions" \
             -H "Authorization: Bearer $RAW_AT" \
             -H "Amazon-Advertising-API-ClientId: $CLIENT_ID" \
             -H "Amazon-Advertising-API-Scope: $SCOPE" \
