@@ -33,20 +33,24 @@ jobs:
           REFRESH_TOKEN: ${{ secrets.LWA_REFRESH_TOKEN }}
         run: |
           set -euo pipefail
-          ACCESS_JSON=$(curl -sS -X POST "https://api.amazon.com/auth/o2/token" \
+          OUT=$(mktemp); HDR=$(mktemp)
+          curl -sS -i -o "$OUT" -D "$HDR" https://api.amazon.com/auth/o2/token \
             -H "Content-Type: application/x-www-form-urlencoded" \
             --data-urlencode "grant_type=refresh_token" \
             --data-urlencode "refresh_token=$REFRESH_TOKEN" \
             --data-urlencode "client_id=$CLIENT_ID" \
-            --data-urlencode "client_secret=$CLIENT_SECRET")
-          echo "$ACCESS_JSON" | jq .
-          AT=$(echo "$ACCESS_JSON" | jq -r '.access_token')
-          if [ -z "$AT" ] || [ "$AT" = "null" ]; then
+            --data-urlencode "client_secret=$CLIENT_SECRET"
+          echo "=== Token Response Headers ==="
+          cat "$HDR"
+          echo "=== Token Response Body ==="
+          cat "$OUT" | jq . || cat "$OUT"
+          AT=$(cat "$OUT" | jq -r '.access_token // empty')
+          if [ -z "$AT" ]; then
             echo "access_token 获取失败"; exit 1
           fi
           echo "access_token=$AT" >> "$GITHUB_OUTPUT"
 
-      - name: Create subscription (dataset → Firehose)
+      - name: Create subscription (dataset → Firehose, verbose)
         id: create
         shell: bash
         env:
@@ -56,17 +60,18 @@ jobs:
           DELIVERY_ARN: ${{ github.event.inputs.deliveryStreamArn }}
           SUBSCRIBER_ARN: ${{ github.event.inputs.subscriberRoleArn }}
           SUBSCRIPTION_ARN: ${{ github.event.inputs.subscriptionRoleArn }}
-          CLIENT_ID: ${{ secrets.ADS_CLIENT_ID }}
+          CLIENT_ID: ${{ secrets.LWA_CLIENT_ID }}
         run: |
           set -euo pipefail
-          # 生成无破坏性的 clientRequestToken（避免 here-doc 和 python）
+
+          # 1) 生成 clientRequestToken
           if command -v uuidgen >/dev/null 2>&1; then
             CRT=$(uuidgen)
           else
             CRT=$(cat /proc/sys/kernel/random/uuid)
           fi
 
-          # 组装请求体（用 jq 避免引号转义问题）
+          # 2) 用 jq 组装请求体，避免手写 JSON 转义
           BODY=$(jq -n \
             --arg crt "$CRT" \
             --arg ds "$DATASET_ID" \
@@ -85,35 +90,53 @@ jobs:
               }
             }')
 
-          echo "Request body:"
+          echo "=== Request body ==="
           echo "$BODY" | jq .
 
-          RESP=$(curl -sS -X POST "https://advertising-api.amazon.com/streams/subscriptions" \
+          # 3) 发送创建订阅请求（保留头和返回体）
+          RESP_BODY=$(mktemp)
+          RESP_HDR=$(mktemp)
+
+          set +e
+          curl -sS -i -o "$RESP_BODY" -D "$RESP_HDR" \
+            -X POST "https://advertising-api.amazon.com/streams/subscriptions" \
             -H "Authorization: Bearer $AT" \
             -H "Amazon-Advertising-API-ClientId: $CLIENT_ID" \
             -H "Amazon-Advertising-API-Scope: $SCOPE" \
             -H "Accept: application/vnd.amazonmarketingstreamsubscriptions.v1+json" \
             -H "Content-Type: application/vnd.amazonmarketingstreamsubscriptions.v1+json" \
-            --data "$BODY")
+            --data "$BODY"
+          RC=$?
+          set -e
 
-          echo "Create response:"
-          echo "$RESP" | jq . || echo "$RESP"
-          SUB_ID=$(echo "$RESP" | jq -r '.subscriptionId // empty')
-          if [ -z "$SUB_ID" ]; then
-            echo "创建订阅失败"; exit 1
+          echo "=== Response headers ==="
+          cat "$RESP_HDR"
+          echo "=== Response body ==="
+          cat "$RESP_BODY" | jq . || cat "$RESP_BODY"
+
+          SUB_ID=$(cat "$RESP_BODY" | jq -r '.subscriptionId // empty')
+
+          if [ "$RC" -ne 0 ]; then
+            echo "curl 返回码: $RC"
+            exit $RC
           fi
+
+          if [ -z "$SUB_ID" ]; then
+            echo "没有返回 subscriptionId，见上面的响应内容。"
+            exit 1
+          fi
+
           echo "subscription_id=$SUB_ID" >> "$GITHUB_OUTPUT"
 
       - name: Verify (list subscriptions)
         shell: bash
         env:
-          AT: ${{ steps.create.outputs.subscription_id }}
           RAW_AT: ${{ steps.token.outputs.access_token }}
           SCOPE: ${{ github.event.inputs.profileId }}
-          CLIENT_ID: ${{ secrets.ADS_CLIENT_ID }}
+          CLIENT_ID: ${{ secrets.LWA_CLIENT_ID }}
         run: |
           set -euo pipefail
-          echo "Subscription created: $AT"
+          echo "=== List subscriptions ==="
           curl -sS -X GET "https://advertising-api.amazon.com/streams/subscriptions" \
             -H "Authorization: Bearer $RAW_AT" \
             -H "Amazon-Advertising-API-ClientId: $CLIENT_ID" \
