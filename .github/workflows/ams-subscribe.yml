@@ -135,3 +135,14 @@ jobs:
             -H "Amazon-Advertising-API-Scope: $SCOPE" \
             -H "Accept: application/vnd.amazonmarketingstreamsubscriptions.v1+json" \
           | jq .
+      - name: Debug GET profiles
+        shell: bash
+        env:
+          AT: ${{ steps.token.outputs.access_token }}
+          CLIENT_ID: ${{ secrets.LWA_CLIENT_ID }}
+        run: |
+          curl -sS -X GET "https://advertising-api.amazon.com/v2/profiles" \
+          -H "Authorization: Bearer $AT" \
+          -H "Amazon-Advertising-API-ClientId: $CLIENT_ID" \
+          -H "Accept: application/json" | jq .
+
