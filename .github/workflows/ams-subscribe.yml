@@ -95,7 +95,7 @@ jobs:
           CURL_HDR=$(mktemp)
           # 同样：去掉 -i，只保留 -o 与 -D
           set +e
-          curl -sS -o "$CURL_OUT" -D "$CURL_HDR" -X POST "https://advertising-api.amazon.com/streams/subscriptions" \
+          curl -sS -o "$CURL_OUT" -D "$CURL_HDR" -X POST "https://advertising-api-fe.amazon.com/streams/subscriptions" \
             -H "Authorization: Bearer $AT" \
             -H "Amazon-Advertising-API-ClientId: $CLIENT_ID" \
             -H "Amazon-Advertising-API-Scope: $SCOPE" \
@@ -129,7 +129,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "=== List Subscriptions ==="
-          curl -sS -o - -X GET "https://advertising-api.amazon.com/streams/subscriptions" \
+          curl -sS -o - -X GET "https://advertising-api-fe.amazon.com/streams/subscriptions" \
             -H "Authorization: Bearer $RAW_AT" \
             -H "Amazon-Advertising-API-ClientId: $CLIENT_ID" \
             -H "Amazon-Advertising-API-Scope: $SCOPE" \
@@ -141,7 +141,7 @@ jobs:
           AT: ${{ steps.token.outputs.access_token }}
           CLIENT_ID: ${{ secrets.LWA_CLIENT_ID }}
         run: |
-          curl -sS -X GET "https://advertising-api.amazon.com/v2/profiles" \
+          curl -sS -X GET "https://advertising-api-fe.amazon.com/v2/profiles" \
           -H "Authorization: Bearer $AT" \
           -H "Amazon-Advertising-API-ClientId: $CLIENT_ID" \
           -H "Accept: application/json" | jq .
